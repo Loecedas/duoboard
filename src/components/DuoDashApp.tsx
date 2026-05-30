@@ -11,6 +11,16 @@ const LazyHeatmapChart = lazy(() => import('./Charts').then(m => ({ default: m.H
 const LazyAchievementsSection = lazy(() => import('./achievements/AchievementsSection'));
 const LazyAiCoach = lazy(() => import('./AiCoach').then(m => ({ default: m.AiCoach })));
 
+function getTimezoneHeaders(): HeadersInit {
+  const timeZone = typeof Intl !== 'undefined'
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : 'Asia/Shanghai';
+
+  return {
+    'x-user-timezone': timeZone,
+  };
+}
+
 function ChartSkeleton(): React.ReactElement {
   return (
     <div className="h-40 w-full bg-gray-100 dark:bg-slate-800 rounded-xl animate-pulse flex items-center justify-center" style={{ minHeight: '160px' }}>
@@ -310,7 +320,7 @@ export function DuoDashApp(): React.ReactElement {
 
         await new Promise<void>(resolve => setTimeout(resolve, 0));
 
-        const dataRes = await fetch('/api/data');
+        const dataRes = await fetch('/api/data', { headers: getTimezoneHeaders() });
         let result: any = {};
         if (dataRes.ok) {
           try {
@@ -429,7 +439,7 @@ export function DuoDashApp(): React.ReactElement {
     setLoading(true);
     setError(null);
     try {
-      const dataRes = await fetch('/api/data');
+      const dataRes = await fetch('/api/data', { headers: getTimezoneHeaders() });
       let result: any = {};
       if (dataRes.ok) {
         try {

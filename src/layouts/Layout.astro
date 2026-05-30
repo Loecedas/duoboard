@@ -1,4 +1,6 @@
 ---
+import '../styles/global.css';
+
 interface Props {
   title: string;
 }
@@ -304,5 +306,21 @@ const { title } = Astro.props;
   .scrollbar-hide {
     -ms-overflow-style: none; /* IE and Edge */
     scrollbar-width: none; /* Firefox */
+  }
+
+  .chart-shell :focus {
+    outline: none;
+  }
+
+  .chart-shell :focus-visible {
+    outline: 2px solid #58cc02;
+    outline-offset: 2px;
+    border-radius: 8px;
+  }
+
+  .chart-shell svg:focus,
+  .chart-shell [role='application']:focus,
+  .chart-shell [tabindex]:focus:not(:focus-visible) {
+    outline: none;
   }
 </style>

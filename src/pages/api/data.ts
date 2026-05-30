@@ -9,6 +9,7 @@ const DUOLINGO_BASE_URL = 'https://www.duolingo.com';
 const CACHE_TTL = 30 * 60 * 1000;
 const MAX_CACHE_SIZE = 100;
 const DEFAULT_TIMEOUT = 10000;
+const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 
 const cache = new Map<string, CacheEntry<UserData>>();
 
@@ -43,6 +44,7 @@ export const GET: APIRoute = async ({ request }) => {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 
+  const userTimeZone = request.headers.get('x-user-timezone') || DEFAULT_TIMEZONE;
   const username = getEnv('DUOLINGO_USERNAME');
   const jwt = getEnv('DUOLINGO_JWT');
 
@@ -53,7 +55,7 @@ export const GET: APIRoute = async ({ request }) => {
   const url = new URL(request.url);
   const forceRefresh = url.searchParams.get('force') === 'true';
 
-  const cacheKey = `user:${username}`;
+  const cacheKey = `user:${username}:tz:${userTimeZone}`;
   const cached = cache.get(cacheKey);
   if (!forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return jsonResponse({ data: cached.data, cached: true }, 200, { cacheControl: 'private, max-age=60' });
@@ -154,7 +156,7 @@ export const GET: APIRoute = async ({ request }) => {
       }
     }
 
-    const transformed = transformDuolingoData(userData);
+    const transformed = transformDuolingoData(userData, userTimeZone);
 
     if (cache.size >= MAX_CACHE_SIZE) {
       const oldestKey = cache.keys().next().value;

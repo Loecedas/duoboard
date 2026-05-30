@@ -1,18 +1,22 @@
 import { defineConfig } from 'astro/config';
 import netlify from '@astrojs/netlify';
 import vercel from '@astrojs/vercel';
-import tailwind from '@astrojs/tailwind';
 import react from '@astrojs/react';
 
-const adapter = (process.env.NETLIFY) 
-  ? netlify() 
-  : vercel();
+const isDev = process.env.NODE_ENV !== 'production';
+const adapter = isDev
+  ? undefined
+  : (process.env.NETLIFY ? netlify() : vercel());
 
 export default defineConfig({
   output: 'server',
   adapter,
   integrations: [
-    tailwind(),
     react(),
   ],
+  vite: {
+    optimizeDeps: {
+      include: ['react-is', 'recharts'],
+    },
+  },
 });

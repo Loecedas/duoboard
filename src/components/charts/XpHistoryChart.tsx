@@ -26,7 +26,7 @@ function XpHistoryChart({ data }: XpHistoryChartProps): React.ReactElement {
   } as const;
 
   return (
-    <div className="w-full min-w-0">
+    <div className="chart-shell w-full min-w-0">
       <div className="h-40 w-full min-w-0" style={{ minHeight: '160px', position: 'relative' }}>
         <ResponsiveContainer width="100%" height={160}>
           <AreaChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>

@@ -114,18 +114,18 @@ function getStartOfDayInTimezone(date: Date, timeZone: string = DEFAULT_TIMEZONE
  * 统一处理数字时间戳和字符串日期格式
  * 返回 null 表示无效日期
  */
-function parseSummaryDateKey(date: number | string): string | null {
+function parseSummaryDateKey(date: number | string, timeZone: string = DEFAULT_TIMEZONE): string | null {
   if (typeof date === 'number') {
     // Duolingo timestamps are usually in seconds
     const d = new Date(date < 10000000000 ? date * 1000 : date);
     if (isNaN(d.getTime())) return null;
-    return toLocalDateKey(d);
+    return toLocalDateKey(d, timeZone);
   }
   // Standardize string date parsing
   const dateStr = String(date).replace(/\//g, '-');
   const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00Z`);
   if (isNaN(d.getTime())) return null;
-  return toLocalDateKey(d);
+  return toLocalDateKey(d, timeZone);
 }
 
 
@@ -162,10 +162,10 @@ function getMonday(date: Date, timeZone: string = DEFAULT_TIMEZONE): Date {
   return monday;
 }
 
-function calcDaysSince(createdAt: Date): number {
+function calcDaysSince(createdAt: Date, timeZone: string = DEFAULT_TIMEZONE): number {
   // 使用与其他日期处理一致的 Asia/Shanghai 时区，避免在 UTC 服务器上注册天数计算错误
-  const todayKey = toLocalDateKey(new Date());
-  const createdKey = toLocalDateKey(createdAt);
+  const todayKey = toLocalDateKey(new Date(), timeZone);
+  const createdKey = toLocalDateKey(createdAt, timeZone);
   const diffMs = new Date(todayKey).getTime() - new Date(createdKey).getTime();
   return Math.max(0, Math.floor(diffMs / MS_PER_DAY));
 }
@@ -200,14 +200,14 @@ function resolveTierIndex(rawAny: any, rawData: DuolingoRawUser): number {
   return -1;
 }
 
-function parseCreationDate(creationTs: number | undefined, created: string | undefined): { dateStr: string; ageDays: number } {
+function parseCreationDate(creationTs: number | undefined, created: string | undefined, timeZone: string = DEFAULT_TIMEZONE): { dateStr: string; ageDays: number } {
   if (creationTs) {
     const ts = creationTs < 10000000000 ? creationTs * 1000 : creationTs;
     const cDate = new Date(ts);
     if (!isNaN(cDate.getTime())) {
       return {
-        dateStr: cDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }),
-        ageDays: calcDaysSince(cDate)
+        dateStr: cDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone }),
+        ageDays: calcDaysSince(cDate, timeZone)
       };
     }
   }
@@ -215,8 +215,8 @@ function parseCreationDate(creationTs: number | undefined, created: string | und
     const cDate = new Date(created);
     if (!isNaN(cDate.getTime())) {
       return {
-        dateStr: cDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }),
-        ageDays: calcDaysSince(cDate)
+        dateStr: cDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone }),
+        ageDays: calcDaysSince(cDate, timeZone)
       };
     }
   }
@@ -227,13 +227,14 @@ function resolveStreakExtendedTime(
   streakExtendedToday: boolean,
   rawAny: any,
   rawData: DuolingoRawUser,
-  localTodayStart: number
+  localTodayStart: number,
+  timeZone: string = DEFAULT_TIMEZONE
 ): string | undefined {
   if (!streakExtendedToday) return undefined;
 
   if (rawAny.streakData?.currentStreak?.lastExtendedDate) {
     return new Date(rawAny.streakData.currentStreak.lastExtendedDate)
-      .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone });
   }
 
   if (rawData.calendar?.length) {
@@ -243,7 +244,7 @@ function resolveStreakExtendedTime(
       .sort((a, b) => a.datetime - b.datetime);
     if (todayEvents.length > 0) {
       return new Date(todayEvents[0].datetime)
-        .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone });
     }
   }
 
@@ -253,7 +254,7 @@ function resolveStreakExtendedTime(
       .sort((a: any, b: any) => a.time - b.time);
     if (todayGains.length > 0) {
       return new Date(todayGains[0].time * 1000)
-        .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone });
     }
   }
 
@@ -265,7 +266,7 @@ function sumPoints(items: Array<{ points?: number; xp?: number }> | undefined): 
   return items.reduce((sum, item) => sum + (item.points || item.xp || 0), 0);
 }
 
-export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
+export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string = DEFAULT_TIMEZONE): UserData {
   // 输入验证
   if (!rawData || typeof rawData !== 'object') {
     throw new TypeError('transformDuolingoData: 输入必须是有效的用户数据对象');
@@ -416,7 +417,7 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
     if (!event || !event.datetime) return;
     const d = new Date(event.datetime);
     if (isNaN(d.getTime())) return;
-    const dateKey = toLocalDateKey(d);
+    const dateKey = toLocalDateKey(d, timeZone);
     const improvement = event.improvement || 0;
     xpByDate.set(dateKey, (xpByDate.get(dateKey) || 0) + improvement);
     timeByDate.set(dateKey, (timeByDate.get(dateKey) || 0) + Math.ceil((improvement || 10) / 3));
@@ -424,7 +425,7 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
 
   if (rawAny._xpSummaries?.length) {
     for (const summary of rawAny._xpSummaries) {
-      const dateKey = parseSummaryDateKey(summary.date);
+      const dateKey = parseSummaryDateKey(summary.date, timeZone);
       if (!dateKey) continue;
 
       const gainedXp = summary.gainedXp ?? summary.gained_xp ?? 0;
@@ -448,10 +449,9 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
   const today = new Date();
 
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i);
-    const dateKey = toLocalDateKey(d);
-    const dayLabel = d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+    const d = new Date(today.getTime() - i * MS_PER_DAY);
+    const dateKey = toLocalDateKey(d, timeZone);
+    const dayLabel = d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', timeZone });
     dailyXpHistory.push({ date: dayLabel, xp: xpByDate.get(dateKey) || 0 });
     dailyTimeHistory.push({ date: dayLabel, time: timeByDate.get(dateKey) || 0 });
   }
@@ -459,14 +459,14 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
   // 自然周数据（用于分享卡片，周一到周日）
   const weeklyXpHistory: { date: string; xp: number; isFuture: boolean }[] = [];
   const weeklyTimeHistory: { date: string; time: number; isFuture: boolean }[] = [];
-  const monday = getMonday(today);
-  const todayDateKey = toLocalDateKey(today);
+  const monday = getMonday(today, timeZone);
+  const todayDateKey = toLocalDateKey(today, timeZone);
 
   for (let i = 0; i < 7; i++) {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    const dateKey = toLocalDateKey(d);
-    const dayLabel = d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+    const dateKey = toLocalDateKey(d, timeZone);
+    const dayLabel = d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', timeZone });
     const isFuture = dateKey > todayDateKey;
 
     weeklyXpHistory.push({
@@ -488,7 +488,7 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
   const leagueName = (tierIndex >= 0 && tierIndex < LEAGUE_TIERS.length)
     ? LEAGUE_TIERS[tierIndex] : "—";
 
-  const { dateStr: creationDateStr, ageDays: accountAgeDays } = parseCreationDate(creationTs, rawData.created);
+  const { dateStr: creationDateStr, ageDays: accountAgeDays } = parseCreationDate(creationTs, rawData.created, timeZone);
 
   const hasInventoryPremium = rawAny.inventory?.premium_subscription || rawAny.inventory?.super_subscription;
   const hasItemPremium = rawAny.has_item_premium_subscription || rawAny.has_item_immersive_subscription;
@@ -521,16 +521,16 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
   const streakExtendedToday = rawAny.streak_extended_today ?? rawAny.streakExtendedToday ?? false;
 
   const now = new Date();
-  const localTodayStart = getStartOfDayInTimezone(now);
+  const localTodayStart = getStartOfDayInTimezone(now, timeZone);
   const localTodayEnd = localTodayStart + MS_PER_DAY;
-  const localTodayDateKey = toLocalDateKey(now);
+  const localTodayDateKey = toLocalDateKey(now, timeZone);
 
-  const streakExtendedTime = resolveStreakExtendedTime(streakExtendedToday, rawAny, rawData, localTodayStart);
+  const streakExtendedTime = resolveStreakExtendedTime(streakExtendedToday, rawAny, rawData, localTodayStart, timeZone);
 
   // 优先从 xpSummaries 获取今日数据（包含官方统计的 numSessions）
   if (rawAny._xpSummaries?.length) {
     const todaySummary = rawAny._xpSummaries.find((s: any) =>
-      parseSummaryDateKey(s.date) === localTodayDateKey
+      parseSummaryDateKey(s.date, timeZone) === localTodayDateKey
     );
     if (todaySummary) {
       xpToday = todaySummary.gainedXp ?? todaySummary.gained_xp ?? 0;
@@ -592,7 +592,12 @@ export function transformDuolingoData(rawData: DuolingoRawUser): UserData {
  * 替代了之前直接访问 Duolingo 的逻辑，解决了 CORS 和 安全问题
  */
 export async function fetchDuolingoData(): Promise<UserData> {
-  const response = await fetch('/api/data');
+  const timeZone = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : DEFAULT_TIMEZONE;
+  const response = await fetch('/api/data', {
+    headers: {
+      'x-user-timezone': timeZone,
+    },
+  });
   const result = await response.json();
 
   if (!response.ok) {
