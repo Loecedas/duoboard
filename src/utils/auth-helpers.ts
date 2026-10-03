@@ -39,12 +39,17 @@ export function isSameOrigin(request: Request): boolean {
     const requestUrl = new URL(requestOrigin);
     const currentUrl = new URL(request.url);
     
-    // 允许相同 hostname，或者两者都是 vercel.app 的子域名
+    // 允许相同 hostname，或者两者都是 Cloudflare / Vercel / Netlify 的子域名
+    const isCloudflare = (requestUrl.hostname.endsWith('.pages.dev') && currentUrl.hostname.endsWith('.pages.dev')) ||
+                         (requestUrl.hostname.endsWith('.workers.dev') && currentUrl.hostname.endsWith('.workers.dev'));
     const isVercel = requestUrl.hostname.endsWith('.vercel.app') && currentUrl.hostname.endsWith('.vercel.app');
+    const isNetlify = requestUrl.hostname.endsWith('.netlify.app') && currentUrl.hostname.endsWith('.netlify.app');
     
     return (
       requestUrl.hostname === currentUrl.hostname ||
+      isCloudflare ||
       isVercel ||
+      isNetlify ||
       requestUrl.hostname === 'localhost' ||
       requestUrl.hostname === '127.0.0.1'
     );

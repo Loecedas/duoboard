@@ -4,10 +4,19 @@
  */
 
 /**
- * 获取环境变量，兼容 process.env 和 import.meta.env
+ * 获取环境变量，兼容 Node.js、Cloudflare Workers/Pages、Vite 等各类运行时
  */
 export function getEnv(key: string): string {
-  return process.env[key] || (import.meta.env as Record<string, string>)[key] || '';
+  if (typeof process !== 'undefined' && process.env && process.env[key]) {
+    return process.env[key];
+  }
+  if (typeof import.meta !== 'undefined' && import.meta.env && (import.meta.env as Record<string, string>)[key]) {
+    return (import.meta.env as Record<string, string>)[key];
+  }
+  if (typeof globalThis !== 'undefined' && (globalThis as any)[key]) {
+    return String((globalThis as any)[key]);
+  }
+  return '';
 }
 
 /**

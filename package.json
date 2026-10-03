@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "preview:cf": "astro build && wrangler dev",
+    "deploy": "astro build && wrangler deploy"
   },
   "dependencies": {
     "@astrojs/netlify": "^7.0.11",
@@ -24,7 +26,9 @@
     "tailwindcss": "^3.4.19"
   },
   "devDependencies": {
+    "@astrojs/cloudflare": "^13.7.0",
     "@astrojs/vercel": "^10.0.8",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "wrangler": "^4.147.0"
   }
 }
