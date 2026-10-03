@@ -116,13 +116,21 @@ function getStartOfDayInTimezone(date: Date, timeZone: string = DEFAULT_TIMEZONE
  */
 function parseSummaryDateKey(date: number | string, timeZone: string = DEFAULT_TIMEZONE): string | null {
   if (typeof date === 'number') {
-    // Duolingo timestamps are usually in seconds
+    // 多邻国 xp_summaries 中 date 统一为秒级 Unix 时间戳，代表该自然日的 UTC 午夜（如 1790985600 对应 2026-10-03 00:00:00 UTC）
+    const sec = date < 10000000000 ? date : Math.floor(date / 1000);
+    if (sec % 86400 === 0) {
+      const d = new Date(sec * 1000);
+      return d.toISOString().split('T')[0];
+    }
     const d = new Date(date < 10000000000 ? date * 1000 : date);
     if (isNaN(d.getTime())) return null;
     return toLocalDateKey(d, timeZone);
   }
   // Standardize string date parsing
   const dateStr = String(date).replace(/\//g, '-');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return dateStr;
+  }
   const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00Z`);
   if (isNaN(d.getTime())) return null;
   return toLocalDateKey(d, timeZone);
@@ -284,10 +292,8 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
     ?? rawData.gemsTotalCount ?? rawData.totalGems ?? rawData.gems
     ?? rawData.tracking_properties?.gems ?? rawData.lingots ?? rawData.rupees ?? 0;
 
-  let totalXp = rawData.total_xp ?? rawData.totalXp ?? 0;
-  if (totalXp === 0) totalXp = sumPoints(rawData.languages);
-  if (totalXp === 0 && rawData.language_data) totalXp = sumPoints(Object.values(rawData.language_data));
-  if (totalXp === 0) totalXp = sumPoints(rawData.courses);
+  const rawExplicitXp = rawAny._amebaTotalXp ?? rawAny._fieldsTotalXp ?? rawData.totalXp ?? rawData.total_xp
+    ?? rawAny.trackingProperties?.total_xp ?? rawAny.tracking_properties?.total_xp ?? 0;
 
   const dailyGoal = rawData.dailyGoal ?? rawData.daily_goal ?? rawData.xpGoal ?? 0;
   const creationTs = rawData.creation_date || rawData.creationDate;
@@ -310,17 +316,43 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
         title = LANGUAGE_NAME_MAP[langCode.toLowerCase()] || rawData.language_data?.[langCode]?.language_string || title || langCode;
       }
 
+      // 跨版本融合：2023 Ameba 移除了皇冠等指标，从 2017 历史数据中精准补全
+      const legacyCourse = rawData.courses?.find((lc: any) => lc.id === c.id || (lc.learningLanguage && lc.learningLanguage === c.learningLanguage));
+      const legacyLangData = c.learningLanguage ? rawData.language_data?.[c.learningLanguage] : null;
+      const crowns = c.crowns || legacyCourse?.crowns || legacyLangData?.crowns || 0;
+      const xp = c.xp || legacyCourse?.xp || legacyLangData?.points || 0;
+
       return {
         id: c.id || c.learningLanguage || subject || Math.random().toString(36).substr(2, 9),
         title: title || '未知课程',
-        xp: c.xp || 0,
-        fromLanguage: c.fromLanguage || 'en',
+        xp,
+        fromLanguage: c.fromLanguage || legacyCourse?.fromLanguage || 'en',
         learningLanguage: c.learningLanguage || subject || '',
-        crowns: c.crowns || 0,
+        crowns,
         subject: subject,
         timeSpent: c.timeSpent || c.duration || 0,
       };
     });
+
+    // 容灾与补全：补充 2017 中存在但 Ameba 未同步的历史旧课程
+    if (rawData.courses?.length) {
+      for (const lc of rawData.courses) {
+        const langCode = lc.learningLanguage || '';
+        const alreadyExists = courses.some(c => c.id === lc.id || (langCode && c.learningLanguage === langCode));
+        if (!alreadyExists && ((lc.xp || 0) > 0 || lc.current_learning)) {
+          courses.push({
+            id: lc.id || langCode,
+            title: lc.title || (langCode ? LANGUAGE_NAME_MAP[langCode.toLowerCase()] : null) || langCode || '历史课程',
+            xp: lc.xp || 0,
+            fromLanguage: lc.fromLanguage || 'en',
+            learningLanguage: langCode,
+            crowns: lc.crowns || 0,
+            subject: 'language',
+            timeSpent: 0
+          });
+        }
+      }
+    }
   }
 
   // 如果没有 Ameba 数据，尝试回退到旧版 courses 字段
@@ -384,6 +416,20 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
       });
   }
 
+  // 真实总经验值（全量接口融合校准）：
+  // 1. 2023 Ameba 接口显式返回的 totalXp
+  // 2. 2017 fields 接口返回的 totalXp / total_xp
+  // 3. 用户基础档案中的 totalXp / total_xp
+  // 4. 2023 与 2017 所有已装载课程（含数学、音乐等所有科目）的经验累加和
+  // 5. 官方 xp_summaries 历史经验流水累加和
+  const coursesXpSum = courses.reduce((sum, c) => sum + (c.xp || 0), 0);
+  const summariesXpSum = rawAny._xpSummaries?.length
+    ? rawAny._xpSummaries.reduce((sum: number, s: any) => sum + (s.gainedXp ?? s.gained_xp ?? 0), 0)
+    : 0;
+  const legacyLangsXp = sumPoints(rawData.languages) || (rawData.language_data ? sumPoints(Object.values(rawData.language_data)) : 0) || sumPoints(rawData.courses);
+
+  const totalXp = Math.max(rawExplicitXp, coursesXpSum, summariesXpSum, legacyLangsXp);
+
   let learningLanguage = "None";
   let learningLanguageCode: string | undefined = undefined;
   let learningSubject: string | undefined = undefined;
@@ -419,8 +465,11 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
     if (isNaN(d.getTime())) return;
     const dateKey = toLocalDateKey(d, timeZone);
     const improvement = event.improvement || 0;
-    xpByDate.set(dateKey, (xpByDate.get(dateKey) || 0) + improvement);
-    timeByDate.set(dateKey, (timeByDate.get(dateKey) || 0) + Math.ceil((improvement || 10) / 3));
+    xpByDate.set(dateKey, (xpByDate.get(dateKey) || 0) + (typeof improvement === 'number' && improvement > 0 ? improvement : 0));
+    // 严格以接口数据为准：获取不到时间一律写 0，绝不使用公式乱算
+    if (!timeByDate.has(dateKey)) {
+      timeByDate.set(dateKey, 0);
+    }
   }
 
   if (rawAny._xpSummaries?.length) {
@@ -429,11 +478,12 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
       if (!dateKey) continue;
 
       const gainedXp = summary.gainedXp ?? summary.gained_xp ?? 0;
-      xpByDate.set(dateKey, gainedXp);
+      xpByDate.set(dateKey, typeof gainedXp === 'number' && !isNaN(gainedXp) && gainedXp > 0 ? gainedXp : 0);
 
       const sessionTimeSeconds = summary.totalSessionTime ?? summary.total_session_time ?? 0;
-      const minutes = Math.round(sessionTimeSeconds / 60);
-      timeByDate.set(dateKey, minutes > 0 ? minutes : Math.ceil(gainedXp / 3));
+      const minutes = typeof sessionTimeSeconds === 'number' && sessionTimeSeconds > 0 ? Math.floor(sessionTimeSeconds / 60) : 0;
+      // 严格以接口实际秒数换算：接口没有时间记录的一律写 0，绝不使用除以 3 估算
+      timeByDate.set(dateKey, minutes);
     }
   } else if (rawData.calendar?.length) {
     rawData.calendar.forEach(addCalendarEvent);
@@ -494,27 +544,27 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
   const hasItemPremium = rawAny.has_item_premium_subscription || rawAny.has_item_immersive_subscription;
   const isPlus = !!(rawData.hasPlus || rawData.hasSuper || rawData.plusStatus === 'active' || rawAny.has_plus || rawAny.is_plus || hasInventoryPremium || hasItemPremium);
 
-  // 计算总学习时间
-  let totalMinutes = 0;
-  let hasRealTimeData = false;
-  
-  // 1. 尝试从课程数据中累加 timeSpent (Ameba)
+  // 严格以接口实际返回的真实统计秒数为准（杜绝任何估算公式或乘数）：
+  // 1. 2023 Ameba 课程接口累计的真实 timeSpent (秒)
   const amebaTimeSeconds = courses.reduce((acc, c) => acc + (c.timeSpent || 0), 0);
-  if (amebaTimeSeconds > 0) {
-    totalMinutes = Math.floor(amebaTimeSeconds / 60);
-    hasRealTimeData = true;
-  }
-  
-  // 2. 如果没有课程时间，使用 xp_summaries 中的真实 totalSessionTime
-  if (!hasRealTimeData && rawAny._xpSummaries?.length) {
-    const totalSeconds = rawAny._xpSummaries.reduce((acc: number, s: any) =>
-      acc + (s.totalSessionTime ?? s.total_session_time ?? 0), 0);
-    totalMinutes = Math.floor(totalSeconds / 60);
-    hasRealTimeData = totalSeconds > 0;
-  }
+
+  // 2. 接口官方 xp_summaries 历史流水中每天完成会话的真实累计秒数 totalSessionTime (秒)
+  const summariesTimeSeconds = rawAny._xpSummaries?.length
+    ? rawAny._xpSummaries.reduce((acc: number, s: any) => acc + (s.totalSessionTime ?? s.total_session_time ?? 0), 0)
+    : 0;
+
+  // 3. 接口直出的真实累计秒数
+  const directTimeSeconds = rawAny._amebaTotalTime ?? rawAny._amebaTimeSpent ?? rawAny._fieldsTotalTime
+    ?? rawAny.totalSessionTime ?? rawAny.timeSpent ?? rawAny.totalTime ?? 0;
+
+  // 100% 严格以接口实际记录的最大累计秒数为准
+  const totalLearningSeconds = Math.max(amebaTimeSeconds, summariesTimeSeconds, directTimeSeconds);
+  const totalMinutes = Math.floor(totalLearningSeconds / 60);
+  const hasRealTimeData = totalLearningSeconds > 0;
+
   const estimatedLearningTime = hasRealTimeData
     ? `${Math.floor(totalMinutes / 60)}小时 ${totalMinutes % 60}分钟`
-    : '暂无数据';
+    : '暂无接口时长数据';
 
   let xpToday = 0;
   let lessonsToday = 0;
@@ -527,7 +577,7 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
 
   const streakExtendedTime = resolveStreakExtendedTime(streakExtendedToday, rawAny, rawData, localTodayStart, timeZone);
 
-  // 优先从 xpSummaries 获取今日数据（包含官方统计的 numSessions）
+  // 1. 优先从官方接口 xp_summaries 获取今日数据
   if (rawAny._xpSummaries?.length) {
     const todaySummary = rawAny._xpSummaries.find((s: any) =>
       parseSummaryDateKey(s.date, timeZone) === localTodayDateKey
@@ -538,36 +588,42 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
     }
   }
 
-  // 备用：从其他数据源获取
-  if (xpToday === 0) {
-    const todayXpFromHistory = xpByDate.get(localTodayDateKey) || 0;
-
-    if (rawAny.xp_today !== undefined) {
-      xpToday = rawAny.xp_today;
-    } else if (todayXpFromHistory > 0) {
-      xpToday = todayXpFromHistory;
-    } else if (rawAny.streakData?.currentStreak?.endDate) {
-      const streakEndTs = new Date(rawAny.streakData.currentStreak.endDate).getTime();
-      if (streakEndTs >= localTodayStart && streakEndTs < localTodayEnd) {
-        xpToday = rawAny.streakData.currentStreak.lastExtendedDate ? 1 : 0;
-      }
-    } else if (rawData.calendar?.length) {
-      const todayEvents = rawData.calendar.filter(e =>
-        e.datetime >= localTodayStart && e.datetime < localTodayEnd
-      );
-      xpToday = todayEvents.reduce((acc, e) => acc + (e.improvement || 0), 0);
-      if (lessonsToday === 0) lessonsToday = todayEvents.length;
+  // 2. 实时 xpGains 校准：检查今日实时发生的经验流水（多邻国学习后 xpGains 实时下发）
+  if (rawAny.xpGains?.length) {
+    const todayGains = rawAny.xpGains.filter((g: any) => {
+      const gainTs = g && typeof g.time === 'number' ? g.time * 1000 : 0;
+      return gainTs >= localTodayStart && gainTs < localTodayEnd;
+    });
+    const xpFromGains = todayGains.reduce((acc: number, g: any) => acc + (g.xp || 0), 0);
+    if (xpFromGains > xpToday) {
+      xpToday = xpFromGains;
+    }
+    if (todayGains.length > lessonsToday) {
+      lessonsToday = todayGains.length;
     }
   }
 
-  // 最终备用：从 xpGains 获取
-  if (xpToday === 0 && rawAny.xpGains?.length) {
-    const todayGains = rawAny.xpGains.filter((g: any) => {
-      const gainTs = g.time * 1000;
-      return gainTs >= localTodayStart && gainTs < localTodayEnd;
-    });
-    xpToday = todayGains.reduce((acc: number, g: any) => acc + (g.xp || 0), 0);
-    if (lessonsToday === 0) lessonsToday = todayGains.length;
+  // 3. 备用：日历流水事件中的今日经验
+  if (xpToday === 0 && rawData.calendar?.length) {
+    const todayEvents = rawData.calendar.filter(e =>
+      e && e.datetime >= localTodayStart && e.datetime < localTodayEnd
+    );
+    const calXp = todayEvents.reduce((acc, e) => acc + (e.improvement || 0), 0);
+    if (calXp > 0) xpToday = calXp;
+    if (lessonsToday === 0) lessonsToday = todayEvents.length;
+  }
+
+  // 4. 显式字段：如果接口直接提供了 xp_today
+  if (xpToday === 0 && typeof rawAny.xp_today === 'number' && rawAny.xp_today > 0) {
+    xpToday = rawAny.xp_today;
+  }
+
+  // 5. 严格规范：未获取到经验或未学习的一律写零（绝不估算、绝不伪造 1 分）
+  if (typeof xpToday !== 'number' || isNaN(xpToday) || xpToday < 0) {
+    xpToday = 0;
+  }
+  if (typeof lessonsToday !== 'number' || isNaN(lessonsToday) || lessonsToday < 0) {
+    lessonsToday = 0;
   }
 
   return {
@@ -577,12 +633,14 @@ export function transformDuolingoData(rawData: DuolingoRawUser, timeZone: string
     weeklyXpHistory, weeklyTimeHistory,
     learningLanguage, learningLanguageCode, learningSubject, creationDate: creationDateStr, accountAgeDays,
     isPlus, dailyGoal, estimatedLearningTime,
+    totalLearningSeconds,
+    totalLearningMinutes: totalMinutes,
     xpToday,
-    lessonsToday: lessonsToday || undefined,
+    lessonsToday: lessonsToday ?? 0,
     streakExtendedToday,
     streakExtendedTime,
     weeklyXp: rawAny.weeklyXp,
-    numSessionsCompleted: rawAny.numSessionsCompleted,
+    numSessionsCompleted: rawAny._amebaSessionCount ?? rawAny.sessionCount ?? rawData.sessionCount ?? rawAny.trackingProperties?.num_sessions_completed ?? rawAny.numSessionsCompleted,
     streakFreezeCount: rawAny.streakFreezeCount
   };
 };

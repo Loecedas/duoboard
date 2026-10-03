@@ -39,6 +39,28 @@ async function fetchWithTimeout(url: string, headers: HeadersInit, timeoutMs = D
   }
 }
 
+function extractUserIdFromJwt(token: string): string | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
+    let json = '';
+    if (typeof Buffer !== 'undefined') {
+      json = Buffer.from(padded, 'base64').toString('utf8');
+    } else if (typeof atob !== 'undefined') {
+      json = decodeURIComponent(
+        Array.prototype.map.call(atob(padded), (c: string) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+      );
+    }
+    const payload = JSON.parse(json);
+    const sub = payload.sub || payload.id || payload.userId || payload.user_id;
+    return sub ? String(sub) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const GET: APIRoute = async ({ request }) => {
   if (!checkToken(request)) {
     return jsonResponse({ error: 'Unauthorized' }, 401);
@@ -70,6 +92,7 @@ export const GET: APIRoute = async ({ request }) => {
 
   const cleanJwt = jwt ? jwt.trim() : '';
   const decodedJwt = cleanJwt ? (() => { try { return decodeURIComponent(cleanJwt); } catch { return cleanJwt; } })() : '';
+  const preExtractedUserId = decodedJwt ? extractUserIdFromJwt(decodedJwt) : null;
 
   // 完整的 Web App 请求头 - 与探测脚本一致（探测脚本确认这套 headers 能通过 403 限制）
   const authHeaders: HeadersInit = decodedJwt
@@ -86,73 +109,151 @@ export const GET: APIRoute = async ({ request }) => {
     : publicHeaders;
 
   try {
-    // 1. 获取公开基础数据
-    const v2Url = `${DUOLINGO_BASE_URL}/2017-06-30/users?username=${username}`;
-    const v2Result = await fetchWithTimeout(v2Url, publicHeaders);
+    let publicData: any = null;
+    let amebaResultData: any = null;
+    let xpSummariesData: any = null;
+    let fieldsData: any = null;
+    let targetUserId = preExtractedUserId;
 
-    const v2Raw = v2Result.data as any;
-    const publicData = v2Raw?.users?.[0] || (v2Raw && !v2Raw.users ? v2Raw : null);
+    // 🚀 性能取长补短：若已从 JWT 解析出 userId，直接全并发发起所有请求，消除原本 2 次串行等待
+    if (decodedJwt && targetUserId) {
+      const [profileSettled, amebaSettled, xpSettled, fieldsSettled] = await Promise.allSettled([
+        // 1. 2017 公开基础档案
+        fetchWithTimeout(`${DUOLINGO_BASE_URL}/2017-06-30/users?username=${username}`, publicHeaders, 8000),
+        // 2. 2023 Ameba 架构接口：明确请求核心档案、totalXp、sessionCount 以及多科目与当前状态
+        fetchWithTimeout(
+          `${DUOLINGO_BASE_URL}/2023-05-23/users/${targetUserId}?fields=id,username,name,picture,streak,creationDate,totalXp,sessionCount,courses,currentCourse,fromLanguage,learningLanguage,trackingProperties,monthlyXp,weeklyXp,xpGains`,
+          authHeaders, 8000
+        ),
+        // 3. 2017 历史 XP 流水 (包含每日真实 totalSessionTime)
+        fetchWithTimeout(
+          `${DUOLINGO_BASE_URL}/2017-06-30/users/${targetUserId}/xp_summaries?startDate=1970-01-01`,
+          authHeaders, 12000
+        ),
+        // 4. 2017 账户资产与段位 (合并 gems,lingots,trackingProperties,totalXp,totalSessionTime 为单个网络请求)
+        fetchWithTimeout(
+          `${DUOLINGO_BASE_URL}/2017-06-30/users/${targetUserId}?fields=gems,lingots,trackingProperties,totalXp,total_xp,totalTime,totalSessionTime`,
+          authHeaders, 8000
+        )
+      ]);
+
+      if (profileSettled.status === 'fulfilled' && profileSettled.value.status === 200 && profileSettled.value.data) {
+        const raw = profileSettled.value.data as any;
+        publicData = raw?.users?.[0] || (raw && !raw.users ? raw : null);
+      }
+
+      // 🛡️ 容灾互补兜底：若 2017 公开用户名接口被 Cloudflare 拦截 (403/429)，用带凭证的 2017 users/{id} 救回基础档案
+      if (!publicData) {
+        const authedUserResult = await fetchWithTimeout(
+          `${DUOLINGO_BASE_URL}/2017-06-30/users/${targetUserId}`,
+          authHeaders, 8000
+        );
+        if (authedUserResult.status === 200 && authedUserResult.data) {
+          const raw = authedUserResult.data as any;
+          publicData = raw?.users?.[0] || (raw && !raw.users ? raw : null);
+        }
+      }
+
+      if (amebaSettled.status === 'fulfilled' && amebaSettled.value.status === 200 && amebaSettled.value.data) {
+        amebaResultData = amebaSettled.value.data;
+      }
+
+      // 🛡️ 终极容灾降级：若 2017 所有接口均无法获取，但 2023 Ameba 成功返回，直接将 2023 数据作为 publicData
+      if (!publicData && amebaResultData) {
+        publicData = amebaResultData;
+      }
+      if (xpSettled.status === 'fulfilled' && xpSettled.value.status === 200 && xpSettled.value.data) {
+        xpSummariesData = (xpSettled.value.data as any)?.summaries;
+      }
+      if (fieldsSettled.status === 'fulfilled' && fieldsSettled.value.status === 200 && fieldsSettled.value.data) {
+        fieldsData = fieldsSettled.value.data;
+      }
+    } else {
+      // 未知 userId 或无 JWT：先查询 2017 公开用户名接口
+      const v2Url = `${DUOLINGO_BASE_URL}/2017-06-30/users?username=${username}`;
+      const v2Result = await fetchWithTimeout(v2Url, publicHeaders);
+      const v2Raw = v2Result.data as any;
+      publicData = v2Raw?.users?.[0] || (v2Raw && !v2Raw.users ? v2Raw : null);
+
+      if (publicData) {
+        targetUserId = publicData.id || publicData.user_id;
+      }
+
+      // 若有 JWT 但未提前解析出 userId，在此拿到 userId 后并发获取子接口
+      if (decodedJwt && targetUserId) {
+        const [amebaSettled, xpSettled, fieldsSettled] = await Promise.allSettled([
+          fetchWithTimeout(
+            `${DUOLINGO_BASE_URL}/2023-05-23/users/${targetUserId}?fields=id,username,name,picture,streak,creationDate,totalXp,sessionCount,courses,currentCourse,fromLanguage,learningLanguage,trackingProperties,monthlyXp,weeklyXp,xpGains`,
+            authHeaders, 8000
+          ),
+          fetchWithTimeout(
+            `${DUOLINGO_BASE_URL}/2017-06-30/users/${targetUserId}/xp_summaries?startDate=1970-01-01`,
+            authHeaders, 12000
+          ),
+          fetchWithTimeout(
+            `${DUOLINGO_BASE_URL}/2017-06-30/users/${targetUserId}?fields=gems,lingots,trackingProperties,totalXp,total_xp,totalTime,totalSessionTime`,
+            authHeaders, 8000
+          )
+        ]);
+
+        if (amebaSettled.status === 'fulfilled' && amebaSettled.value.status === 200 && amebaSettled.value.data) {
+          amebaResultData = amebaSettled.value.data;
+        }
+        if (xpSettled.status === 'fulfilled' && xpSettled.value.status === 200 && xpSettled.value.data) {
+          xpSummariesData = (xpSettled.value.data as any)?.summaries;
+        }
+        if (fieldsSettled.status === 'fulfilled' && fieldsSettled.value.status === 200 && fieldsSettled.value.data) {
+          fieldsData = fieldsSettled.value.data;
+        }
+      }
+    }
+
+    if (!publicData && amebaResultData) {
+      publicData = amebaResultData;
+    }
 
     if (!publicData) {
-      return jsonResponse({ error: `Failed to fetch user data. Duolingo returned status ${v2Result.status}` }, 500);
+      return jsonResponse({ error: 'Failed to fetch user data from Duolingo.' }, 500);
     }
 
     let userData: any = { ...publicData };
-    const userId = publicData.id || publicData.user_id;
 
-    // 有 JWT 时并行获取：XP 历史 + gems + leaderboard tier + ameba 数据
-    if (decodedJwt && userId) {
-      const amebaUrl = `${DUOLINGO_BASE_URL}/2023-05-23/users/${userId}?fields=courses,currentCourse,fromLanguage,learningLanguage,trackingProperties`;
-      
-      const [xpResult, gemsResult, tierResult, amebaResult] = await Promise.all([
-        // XP 历史
-        fetchWithTimeout(
-          `${DUOLINGO_BASE_URL}/2017-06-30/users/${userId}/xp_summaries?startDate=1970-01-01`,
-          authHeaders, 12000
-        ),
-        // gems/lingots（需要 App headers 才能返回）
-        fetchWithTimeout(
-          `${DUOLINGO_BASE_URL}/2017-06-30/users/${userId}?fields=gems,lingots`,
-          authHeaders, 8000
-        ),
-        // leaderboard_league via trackingProperties
-        fetchWithTimeout(
-          `${DUOLINGO_BASE_URL}/2017-06-30/users/${userId}?fields=trackingProperties`,
-          authHeaders, 8000
-        ),
-        // 4. 获取新科目数据 (Ameba Architecture)
-        fetchWithTimeout(amebaUrl, authHeaders, 8000)
-      ]);
-      
-      if (amebaResult.status === 200 && amebaResult.data) {
-        const amebaData = amebaResult.data as any;
-        if (amebaData.courses) userData._amebaCourses = amebaData.courses;
-        if (amebaData.currentCourse) userData._amebaCurrentCourse = amebaData.currentCourse;
+    // 注入 2023 Ameba 架构的新多科目课程、当前学习状态、官方经验与时长
+    if (amebaResultData) {
+      if (amebaResultData.courses) userData._amebaCourses = amebaResultData.courses;
+      if (amebaResultData.currentCourse) userData._amebaCurrentCourse = amebaResultData.currentCourse;
+      if (typeof amebaResultData.totalXp === 'number') userData._amebaTotalXp = amebaResultData.totalXp;
+      if (typeof amebaResultData.xp === 'number') userData._amebaTotalXp = userData._amebaTotalXp ?? amebaResultData.xp;
+      if (typeof amebaResultData.sessionCount === 'number') userData._amebaSessionCount = amebaResultData.sessionCount;
+      if (typeof amebaResultData.totalTime === 'number') userData._amebaTotalTime = amebaResultData.totalTime;
+      if (typeof amebaResultData.timeSpent === 'number') userData._amebaTimeSpent = amebaResultData.timeSpent;
+    }
+
+    // 注入 2017 XP 历史 (每条含官方统计的 gainedXp 与 totalSessionTime)
+    if (xpSummariesData) {
+      userData._xpSummaries = xpSummariesData;
+    }
+
+    // 注入真实宝石/红宝石资产与显式接口经验/时长
+    if (fieldsData) {
+      if (typeof fieldsData.gems === 'number') {
+        userData._inventoryGems = fieldsData.gems;
+      } else if (typeof fieldsData.lingots === 'number') {
+        userData._inventoryGems = fieldsData.lingots;
       }
+      if (typeof fieldsData.totalXp === 'number') userData._fieldsTotalXp = fieldsData.totalXp;
+      if (typeof fieldsData.total_xp === 'number') userData._fieldsTotalXp = fieldsData.total_xp;
+      if (typeof fieldsData.totalTime === 'number') userData._fieldsTotalTime = fieldsData.totalTime;
+      if (typeof fieldsData.totalSessionTime === 'number') userData._fieldsTotalTime = fieldsData.totalSessionTime;
+    }
 
-      if (xpResult.status === 200 && xpResult.data) {
-        userData._xpSummaries = (xpResult.data as any).summaries;
-      }
-
-      // 注入 gems 真实数据
-      if (gemsResult.status === 200 && gemsResult.data) {
-        const gemsData = gemsResult.data as any;
-        if (typeof gemsData.gems === 'number') {
-          userData._inventoryGems = gemsData.gems;
-        } else if (typeof gemsData.lingots === 'number') {
-          userData._inventoryGems = gemsData.lingots;
-        }
-      }
-
-      // 注入 leaderboard tier 真实数据
-      if (tierResult.status === 200 && tierResult.data) {
-        const tierData = tierResult.data as any;
-        const tracking = tierData.trackingProperties;
-        if (tracking && typeof tracking.leaderboard_league === 'number') {
-          userData._leaderboardTier = tracking.leaderboard_league;
-        } else if (tracking && typeof tracking.league_tier === 'number') {
-          userData._leaderboardTier = tracking.league_tier;
-        }
+    // 注入段位：优先从 2017 fields 获取，亦可从 2023 trackingProperties 互补提取
+    const tracking = fieldsData?.trackingProperties || amebaResultData?.trackingProperties;
+    if (tracking) {
+      if (typeof tracking.leaderboard_league === 'number') {
+        userData._leaderboardTier = tracking.leaderboard_league;
+      } else if (typeof tracking.league_tier === 'number') {
+        userData._leaderboardTier = tracking.league_tier;
       }
     }
 

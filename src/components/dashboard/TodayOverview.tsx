@@ -10,8 +10,8 @@ interface TodayOverviewProps {
 
 export const TodayOverview = React.memo(function TodayOverview({ userData, seq, iconMode }: TodayOverviewProps): React.ReactElement {
   const todayTime = userData?.dailyTimeHistory?.length
-    ? userData.dailyTimeHistory[userData.dailyTimeHistory.length - 1].time || '-'
-    : '-';
+    ? (userData.dailyTimeHistory[userData.dailyTimeHistory.length - 1].time ?? 0)
+    : (userData ? 0 : '—');
 
   function renderTodayStatus(): React.ReactNode {
     if (!userData) {
@@ -61,13 +61,13 @@ export const TodayOverview = React.memo(function TodayOverview({ userData, seq, 
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-xl bg-[#58cc02]/10 p-3 text-center dark:bg-[#58cc02]/20">
             <div className="text-2xl font-extrabold text-[#58cc02]">
-              {userData ? (userData.xpToday ?? '-') : '—'}
+              {userData ? (userData.xpToday ?? 0) : '—'}
             </div>
             <div className="mt-1 text-xs font-bold text-gray-500">今日 XP</div>
           </div>
           <div className="rounded-xl bg-blue-50 p-3 text-center dark:bg-blue-900/30">
             <div className="text-2xl font-extrabold text-blue-500">
-              {userData ? (userData.lessonsToday ?? '-') : '—'}
+              {userData ? (userData.lessonsToday ?? 0) : '—'}
             </div>
             <div className="mt-1 text-xs font-bold text-gray-500">今日课程</div>
           </div>

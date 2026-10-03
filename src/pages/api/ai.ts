@@ -115,6 +115,7 @@ export const POST: APIRoute = async ({ request }) => {
 - 会员状态：${sanitizeBool(userData.isPlus) ? "Super 会员" : "免费用户"}
 - 连胜天数：${sanitize(userData.streak, 10)} 天
 - 总经验值：${sanitize(userData.totalXp, 15)} XP
+- 累计用时：${sanitize(userData.estimatedLearningTime || '未知', 20)}
 - 课程数量：${Math.min(Math.max(0, Number(userData.courses?.length) || 0), 20)} 门
 - 当前学习：${sanitize(userData.learningLanguage, 20)}
     `;

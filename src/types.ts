@@ -36,6 +36,8 @@ export interface UserData {
   dailyGoal: number;
 
   estimatedLearningTime: string;
+  totalLearningSeconds?: number;
+  totalLearningMinutes?: number;
   // 今日数据
   xpToday?: number;
   lessonsToday?: number;

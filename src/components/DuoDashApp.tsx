@@ -134,7 +134,7 @@ const DashboardContent = React.memo(({
           <StatCard iconName="bolt" iconMode={iconMode} value={userData ? viewData.totalXp.toLocaleString() : '—'} label="总经验" colorClass="text-yellow-500" seq={1} />
           <StatCard iconName="calendar" iconMode={iconMode} value={userData ? viewData.accountAgeDays : '—'} label="注册天数" colorClass="text-blue-500" seq={2} />
           <StatCard iconName="books" iconMode={iconMode} value={userData ? viewData.courses.length : '—'} label="学习课程" colorClass="text-teal-500" seq={3} />
-          <StatCard iconName="stopwatch" iconMode={iconMode} value={userData ? viewData.estimatedLearningTime : '—'} label="预估投入" colorClass="text-purple-500" seq={4} isLargeText={false} />
+          <StatCard iconName="stopwatch" iconMode={iconMode} value={userData ? viewData.estimatedLearningTime : '—'} label="累计用时" colorClass="text-purple-500" seq={4} isLargeText={false} />
         </div>
 
         <div className={`grid gap-4 ${hasTimeHistory ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}`}>
