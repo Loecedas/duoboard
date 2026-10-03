@@ -1,13 +1,11 @@
 import type { APIRoute } from 'astro';
 import { getEnv, jsonResponse } from '../../utils/api-helpers';
-import { isSameOrigin } from '../../utils/auth-helpers';
 
 export const prerender = false;
 
-export const GET: APIRoute = async ({ request }) => {
-  const username = getEnv('DUOLINGO_USERNAME');
-
-  const jwt = getEnv('DUOLINGO_JWT');
+export const GET: APIRoute = async ({ locals }) => {
+  const username = getEnv('DUOLINGO_USERNAME', locals);
+  const jwt = getEnv('DUOLINGO_JWT', locals);
 
   const configured =
     username !== '' &&

@@ -8,3 +8,6 @@ directory = "./dist/client"
 
 [observability]
 enabled = true
+
+[vars]
+NODE_VERSION = "22.12.0"

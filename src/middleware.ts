@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'astro';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
+import { setRuntimeEnv } from './utils/api-helpers';
 
 const gzipAsync = promisify(gzip);
 
@@ -41,6 +42,24 @@ function isInCompressRange(size: number): boolean {
 }
 
 export const onRequest: MiddlewareHandler = async function (context, next) {
+  // ⚡ 核心：提取 Cloudflare Workers / Pages 边缘运行时的环境变量与 Secrets
+  const cfEnv = (context.locals as any)?.runtime?.env;
+  if (cfEnv && typeof cfEnv === 'object') {
+    setRuntimeEnv(cfEnv);
+    try {
+      (globalThis as any).__CF_ENV__ = { ...((globalThis as any).__CF_ENV__ || {}), ...cfEnv };
+      if (typeof process !== 'undefined' && process.env) {
+        for (const [k, v] of Object.entries(cfEnv)) {
+          if (typeof v === 'string' && !process.env[k]) {
+            process.env[k] = v;
+          }
+        }
+      }
+    } catch {
+      // 忽略只读环境异常
+    }
+  }
+
   const { request } = context;
   const response = await next();
   const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV;

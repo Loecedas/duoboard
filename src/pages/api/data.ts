@@ -61,14 +61,15 @@ function extractUserIdFromJwt(token: string): string | null {
   }
 }
 
-export const GET: APIRoute = async ({ request }) => {
+export const GET: APIRoute = async ({ request, locals }) => {
+  const checkToken = createAuthChecker(() => getEnv('API_SECRET_TOKEN', locals));
   if (!checkToken(request)) {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 
   const userTimeZone = request.headers.get('x-user-timezone') || DEFAULT_TIMEZONE;
-  const username = getEnv('DUOLINGO_USERNAME');
-  const jwt = getEnv('DUOLINGO_JWT');
+  const username = getEnv('DUOLINGO_USERNAME', locals);
+  const jwt = getEnv('DUOLINGO_JWT', locals);
 
   if (!username) {
     return jsonResponse({ error: 'Not configured' }, 400);

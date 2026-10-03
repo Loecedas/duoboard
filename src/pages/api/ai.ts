@@ -31,13 +31,13 @@ const DEFAULT_ENDPOINTS: Record<AiProvider, string> = {
 
 const checkToken = createAuthChecker(() => getEnv('API_SECRET_TOKEN'));
 
-function getEnvConfig(): AiConfig {
-  const provider = (getEnv('AI_PROVIDER') || 'deepseek') as AiProvider;
+function getEnvConfig(locals?: unknown): AiConfig {
+  const provider = (getEnv('AI_PROVIDER', locals) || 'deepseek') as AiProvider;
   return {
     provider,
-    apiKey: getEnv(API_KEY_ENV_MAP[provider]),
-    model: getEnv('AI_MODEL') || 'deepseek-chat',
-    baseUrl: getEnv('AI_BASE_URL'),
+    apiKey: getEnv(API_KEY_ENV_MAP[provider], locals),
+    model: getEnv('AI_MODEL', locals) || 'deepseek-chat',
+    baseUrl: getEnv('AI_BASE_URL', locals),
   };
 }
 
@@ -45,12 +45,13 @@ function buildResponse(analysis: string, config: AiConfig): Response {
   return jsonResponse({ analysis, provider: config.provider, model: config.model });
 }
 
-export const POST: APIRoute = async ({ request }) => {
+export const POST: APIRoute = async ({ request, locals }) => {
+  const checkToken = createAuthChecker(() => getEnv('API_SECRET_TOKEN', locals));
   if (!checkToken(request)) {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 
-  const config = getEnvConfig();
+  const config = getEnvConfig(locals);
 
   if (!config.apiKey) {
     return buildResponse('咕咕！未配置 AI API Key，请在环境变量中设置。', config);
